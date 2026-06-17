@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>경구알약 불량 탐지 — 모델 학습 구현 명세서</title>
+<style>
+  :root{--bg:#0f1419;--panel:#161b22;--panel2:#1c2330;--line:#2a3340;--txt:#e6edf3;
+    --muted:#9aa7b4;--accent:#4dabf7;--accent2:#51cf66;--warn:#ffd43b;--danger:#ff6b6b;--purple:#b197fc;--orange:#ffa94d;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);line-height:1.7;font-size:15px;
+    font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;}
+  .wrap{max-width:1000px;margin:0 auto;padding:42px 24px 90px}
+  header.hero{background:linear-gradient(135deg,#241a40 0%,#1a1030 60%,#0f1419 100%);
+    border:1px solid var(--line);border-radius:18px;padding:32px 30px;margin-bottom:26px}
+  header.hero h1{margin:0 0 8px;font-size:25px;letter-spacing:-.5px}
+  header.hero p{margin:3px 0;color:var(--muted)}
+  header.hero a{color:var(--purple);text-decoration:none}
+  .tagrow{margin-top:14px;display:flex;flex-wrap:wrap;gap:8px}
+  .tag{background:#2a2238;color:var(--purple);border:1px solid #463a5e;border-radius:999px;padding:3px 11px;font-size:12px;font-weight:600}
+  h2{font-size:20px;margin:42px 0 12px;padding-bottom:8px;border-bottom:2px solid var(--line)}
+  h2 .num{color:var(--purple);margin-right:10px}
+  h3{font-size:16px;margin:22px 0 8px;color:#e0d4ff}
+  .muted{color:var(--muted)}.small{font-size:12.5px}
+  code{background:#222b36;padding:2px 6px;border-radius:5px;font-size:12.5px;color:#ffd9a0}
+  pre{background:#0d1117;border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;font-size:12.5px;line-height:1.55}
+  pre code{background:none;padding:0;color:#c9d6e3}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13px}
+  th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+  th{background:#1f2937;color:#dce8f5}tr:nth-child(even) td{background:#141a22}
+  .callout{border-left:4px solid var(--purple);background:var(--panel2);padding:14px 18px;border-radius:0 12px 12px 0;margin:16px 0}
+  .callout.warn{border-left-color:var(--warn)}.callout.danger{border-left-color:var(--danger)}.callout b{color:#fff}
+  .toc{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 22px}
+  .toc a{color:var(--purple);text-decoration:none}.toc a:hover{text-decoration:underline}
+  .toc ol{columns:2;column-gap:30px;margin:6px 0 0}
+  .yes{color:var(--accent2);font-weight:700}.no{color:var(--danger);font-weight:700}
+  footer{margin-top:46px;padding-top:16px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+  @media(max-width:720px){.toc ol{columns:1}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>경구알약 불량 탐지 — 모델 학습 구현 명세서</h1>
+  <p>HumanAI Team 4 · 2026-06-17 · 범위: <b>모델 학습·평가</b> (YOLO 식별기 + PatchCore)</p>
+  <p class="small">서빙 파이프라인은 별도 문서 → <a href="./IMPLEMENTATION_SPEC.html">IMPLEMENTATION_SPEC.html</a></p>
+  <div class="tagrow">
+    <span class="tag">Track1 · YOLO 식별기</span><span class="tag">Track2 · PatchCore/Anomalib</span>
+    <span class="tag">합성불량</span><span class="tag">트랙별 증강</span><span class="tag">GTX 3060</span>
+  </div>
+</header>
+
+<div class="toc">
+  <h3 style="margin-top:0">목차</h3>
+  <ol>
+    <li><a href="#s0">개요</a></li>
+    <li><a href="#s1">⚠️ 선결 — 실제 불량셋</a></li>
+    <li><a href="#s2">데이터 파이프라인</a></li>
+    <li><a href="#s3">트랙별 증강 정책</a></li>
+    <li><a href="#s4">Track 1 — YOLO 식별기</a></li>
+    <li><a href="#s5">Track 2 — PatchCore</a></li>
+    <li><a href="#s6">평가</a></li>
+    <li><a href="#s7">미결정 사항</a></li>
+    <li><a href="#s8">산출물 인터페이스</a></li>
+    <li><a href="#s9">학습 리스크</a></li>
+  </ol>
+</div>
+
+<h2 id="s0"><span class="num">0</span>개요</h2>
+<p>서빙 파이프라인이 소비하는 <b>두 모델 산출물</b>을 생성한다.</p>
+<table>
+  <tr><th>모델</th><th>역할</th><th>구성</th><th>학습 데이터</th><th>산출물</th></tr>
+  <tr><td><b>YOLO 식별기</b> (Track1)</td><td>"무슨 약?" 식별</td><td>통합 1개</td><td>정상 + <b>합성불량</b></td><td><code>yolo/identifier.pt</code></td></tr>
+  <tr><td><b>PatchCore</b> (Track2)</td><td>"정상/불량?" 판정</td><td><b>약종별 200개</b></td><td>약종별 <b>정상만</b></td><td><code>patchcore/{drugId}.ckpt</code></td></tr>
+</table>
+<h3>0.1 핵심 원리</h3>
+<ul class="small">
+  <li><b>Track 1</b>은 <i>비정상(결함)의 생김새</i>를 배운다 → 결함은 약종 무관 전이 → <b>통합 단일 모델</b></li>
+  <li><b>Track 2</b>는 <i>정상의 생김새</i>를 배운다 → 정상은 약마다 완전히 다름 → <b>약종별 모델</b></li>
+  <li>둘의 증강 정책이 <b>정반대</b>인 것이 핵심(§3)</li>
+</ul>
+<h3>0.2 데이터 현황</h3>
+<ul class="small">
+  <li>AI Hub 4TB, <b>정상만</b>, 200종 × ~200장 ≈ 40,000장</li>
+  <li>분포: 원형/타원형/장방형 대다수, 분할선 ~1/3 보유, 각인 대다수, 2색 정제 희귀</li>
+</ul>
+
+<h2 id="s1"><span class="num">1</span>⚠️ 선결 과제 — 실제 불량 평가 셋 (최우선)</h2>
+<div class="callout danger">
+  <b>불량이 0장이면 모델 검증 자체가 불가능하다.</b> 합성으로만 평가하면 낙관적 수치만 나온다.
+</div>
+<ul class="small">
+  <li><b>제작</b>: 실제 알약 물리 손상(긁기·깨기·반점·절단) 또는 라인 폐기품 수집</li>
+  <li><b>촬영</b>: 운영과 동일하게 <b>휴대폰으로 촬영</b>(도메인 일치)</li>
+  <li><b>규모</b>: 결함 유형별 30~50장, 총 수백 장</li>
+  <li><b>용도</b>: <b>val/test 전용</b>(학습 절대 금지)</li>
+  <li><b>착수</b>: 프로젝트 W1부터 즉시</li>
+</ul>
+
+<h2 id="s2"><span class="num">2</span>데이터 파이프라인</h2>
+<h3>2.1 ROI 추출 (공통 전처리)</h3>
+<pre><code>원본 → 알약 검출 → crop → 회전정렬(PCA 주축) → 앞/뒷면 정리 → 정규화(조도/WB) → 저장</code></pre>
+<ul class="small">
+  <li>출력 해상도: 식별기 640px / PatchCore 256~320px</li>
+  <li>서빙 전처리(<code>preprocess.py</code>)와 <b>동일 로직</b> 사용(학습-추론 일관성)</li>
+</ul>
+<h3>2.2 데이터 분할</h3>
+<table>
+  <tr><th>세트</th><th>구성</th><th>용도</th></tr>
+  <tr><td>Train</td><td>정상 + (식별기는 합성불량)</td><td>학습</td></tr>
+  <tr><td>Val</td><td>정상 + <b>실제 불량 일부</b></td><td>임계값·하이퍼파라미터</td></tr>
+  <tr><td>Test</td><td>정상 + <b>실제 불량(held-out)</b></td><td>최종 성능 보고</td></tr>
+</table>
+<p class="small muted">약종 누수 방지: 일반화 검증 시 동일 약종이 train/test에 섞이지 않게 분리.</p>
+
+<h2 id="s3"><span class="num">3</span>데이터 증강 — 트랙별 정반대 (중요)</h2>
+<table>
+  <tr><th>증강</th><th>YOLO 식별기 (Track1)</th><th>PatchCore (Track2)</th></tr>
+  <tr><td>회전·플립·스케일·이동</td><td class="yes">✅ 필수</td><td class="yes">✅ (정상 변이)</td></tr>
+  <tr><td>조명/노출/색지터</td><td class="yes">✅ 적극</td><td>✅ 약하게</td></tr>
+  <tr><td><b>cutout / random erasing</b></td><td class="yes">✅ 유익(결손 모사)</td><td class="no">❌ 금지</td></tr>
+  <tr><td>강한 noise / blur / 색시프트</td><td class="yes">✅ 권장(변색·오염 모사)</td><td class="no">❌ 금지</td></tr>
+  <tr><td>mosaic / mixup</td><td class="yes">✅</td><td>—</td></tr>
+</table>
+<ul class="small">
+  <li><b>식별기</b>: 깨지고 변색된 약도 식별해야 하므로 <b>결함 모사 증강이 오히려 유익</b>. 단 유사 약종 혼동 방지 위해 색지터 강도 보정.</li>
+  <li><b>PatchCore</b>: 증강이 "정상의 정의"를 바꾼다. 결함스러운 증강을 넣으면 <b>민감도가 떨어진다</b> → 정상 변이(포즈·조명)만 허용.</li>
+</ul>
+
+<h2 id="s4"><span class="num">4</span>Track 1 — YOLO 식별기</h2>
+<h3>4.1 과제 정의</h3>
+<ul class="small">
+  <li>입력 ROI → <b>200종 중 약종 분류 (+ 검출 박스)</b></li>
+  <li>단일 200-class 검출기로 <b>localize + identify 동시</b></li>
+  <li>대안: 1-class 검출기 + 별도 분류기 (미결정 §7)</li>
+</ul>
+<h3>4.2 학습 데이터</h3>
+<p class="small">정상 40k + <b>합성불량</b> 추가 (라벨 = 약종 그대로 유지). 합성불량은 "결함 있어도 같은 약"을 가르치는 용도.</p>
+<h3>4.3 합성불량 생성 (분포 조건부)</h3>
+<table>
+  <tr><th>결함</th><th>합성 방법</th><th>분포 규칙</th></tr>
+  <tr><td>깨짐·결손</td><td>마스크 가장자리 erase</td><td><b>분할선 보유 약 → 분할선 따라</b></td></tr>
+  <tr><td>긁힘</td><td>곡선 스플라인·명암</td><td>표면 전역</td></tr>
+  <tr><td>오염·반점</td><td>Perlin 마스크 + 텍스처 blend(Poisson)</td><td>모양 마스크 내부</td></tr>
+  <tr><td>변색</td><td>국소 hue/밝기 시프트</td><td>단색 약 중심</td></tr>
+  <tr><td>각인 결함</td><td>각인 영역 erase/blur/이중화</td><td>각인 보유(대다수)</td></tr>
+</table>
+<p class="small muted">합성에 자동으로 정확한 박스가 따라옴 → 수작업 라벨링 불필요.</p>
+<h3>4.4 결함 강도 (스펙트럼)</h3>
+<ul class="small">
+  <li>약함→강함 전체를 <b>log-uniform</b> 샘플링, 면적 ~0.1~10%, 최소 ~10px</li>
+  <li>easy/medium/hard 버킷 라벨링 → 버킷별 성능으로 검출 한계 측정</li>
+  <li class="no">❌ 큰 결함만 만들지 말 것(미세 결함 누락 위험)</li>
+</ul>
+<h3>4.5 모델/학습 설정</h3>
+<ul class="small">
+  <li>모델: <b>YOLOv12-s/m</b> (3060 적합), 입력 640px, 사전학습 가중치 파인튜닝</li>
+  <li>산출물: <code>models/yolo/identifier.pt</code> + <code>CONF_THRESH</code>(저신뢰 검토 기준) 캘리브레이션</li>
+</ul>
+<h3>4.6 예상 학습 시간 (3060)</h3>
+<ul class="small"><li>YOLOv12-s: ~6–8분/epoch, 100ep ≈ <b>10–14시간</b></li><li>YOLOv12-m: 더 김(필요 시 GCP)</li></ul>
+
+<h2 id="s5"><span class="num">5</span>Track 2 — PatchCore (Anomalib, 약종별 200개)</h2>
+<h3>5.1 과제 정의</h3>
+<p class="small">약종별 <b>정상 표준</b>을 모델링 → 추론 시 벗어남(이상)을 점수·위치로 출력. 약종별 독립 모델 200개. 서빙에서 식별 결과로 라우팅.</p>
+<h3>5.2 학습 데이터</h3>
+<p class="small">약종별 <b>정상만</b> ~200장, ROI 추출(crop+정렬+앞뒷면) 후. 증강: <b>정상 변이만</b>(§3).</p>
+<h3>5.3 Anomalib 설정 예시</h3>
+<pre><code>model:
+  name: patchcore
+  backbone: wide_resnet50_2     # 또는 dinov2 (정확도↑, 무거움)
+  layers: [layer2, layer3]
+  coreset_sampling_ratio: 0.1   # 뱅크 크기·속도·정확도 노브
+dataset:
+  image_size: [320, 320]</code></pre>
+<h3>5.4 학습 절차 (약종별 반복)</h3>
+<pre><code>for drug_id in 200종:
+    정상 ROI 로드 → Anomalib Patchcore fit
+    → val(정상+실제불량)에서 임계값 산출(목표 Recall 기준)
+    → export: models/patchcore/{drug_id}.ckpt (+ threshold 메타)</code></pre>
+<h3>5.5 예상 학습 시간 (3060)</h3>
+<ul class="small">
+  <li>약종당 <b>~1분</b>(특징추출 + coreset, backprop 없음)</li>
+  <li>200종 순차 <b>~2–4시간</b>(병렬 시 단축)</li>
+  <li>진짜 비용은 학습이 아니라 <b>추론 속도 + 메모리뱅크 용량</b> → 해상도·<code>coreset_sampling_ratio</code>로 조절</li>
+</ul>
+<h3>5.6 대안 모델 (벤치마크 후보)</h3>
+<p class="small">Anomalib로 동일 조건 비교 가능: <b>EfficientAD</b>(실시간·저메모리), <b>Reverse Distillation</b>(정확도 상위), <b>FastFlow</b>. 합성불량 적극 활용 시 <b>DRAEM</b>도 후보.</p>
+
+<h2 id="s6"><span class="num">6</span>평가</h2>
+<h3>6.1 지표</h3>
+<table>
+  <tr><th>단계</th><th>지표</th><th>우선순위</th></tr>
+  <tr><td>식별(YOLO)</td><td>Top-1 정확도, 저신뢰율</td><td>핵심</td></tr>
+  <tr><td>판정(PatchCore)</td><td><b>Recall@FPR1%</b></td><td><b>최우선(QC)</b></td></tr>
+  <tr><td></td><td>Image AUROC, Pixel AUROC/PRO</td><td>핵심</td></tr>
+  <tr><td>엔드투엔드</td><td>식별×판정 통합 정확도</td><td>핵심</td></tr>
+</table>
+<h3>6.2 검증 원칙</h3>
+<ul class="small">
+  <li>최종 점수는 <b>실제 불량 셋(휴대폰 촬영)</b>으로만 보고</li>
+  <li>합성불량은 학습 전용</li>
+  <li>3-seed 평균±표준편차(불량 셋이 작으므로)</li>
+  <li>속성별(모양·분할선·각인 유무) 성능 분리 보고 → 약점 파악</li>
+</ul>
+<h3>6.3 비교 실험</h3>
+<table>
+  <tr><th>그룹</th><th>변수</th></tr>
+  <tr><td>이상탐지 모델</td><td>PatchCore vs EfficientAD vs RD (Anomalib)</td></tr>
+  <tr><td>백본</td><td>wide_resnet50 vs dinov2</td></tr>
+  <tr><td>입력 해상도</td><td>256 / 320 / 512</td></tr>
+  <tr><td>합성 ablation</td><td>기법별(Perlin/CutPaste/Scratch) on-off</td></tr>
+  <tr><td>일반화</td><td>leave-types-out(신규 약종)</td></tr>
+</table>
+
+<h2 id="s7"><span class="num">7</span>미결정 사항 (Open Questions)</h2>
+<ol class="small">
+  <li><b>앞/뒷면</b>: 면별 PatchCore vs 양면 통합 1모델</li>
+  <li><b>약종 수</b>: 200 개별 vs 모양×색 클러스터 묶음(모델 수 절감)</li>
+  <li><b>YOLO 식별 구조</b>: 단일 200-class 검출기 vs (1-class 검출 + 분류기)</li>
+  <li><b>PatchCore 백본</b>: wide_resnet50 vs dinov2</li>
+</ol>
+
+<h2 id="s8"><span class="num">8</span>산출물 인터페이스 (서빙으로 전달)</h2>
+<table>
+  <tr><th>산출물</th><th>경로</th><th>비고</th></tr>
+  <tr><td>식별기 가중치</td><td><code>models/yolo/identifier.pt</code></td><td>+ <code>CONF_THRESH</code></td></tr>
+  <tr><td>약종별 PatchCore</td><td><code>models/patchcore/{drugId}.ckpt</code> ×200</td><td>+ threshold 메타</td></tr>
+  <tr><td>약종 매핑</td><td><code>drug_map.json</code></td><td>drugId ↔ drugName</td></tr>
+  <tr><td>모델 버전</td><td><code>modelVersion</code> 문자열</td><td>결과 기록용</td></tr>
+</table>
+<div class="callout"><span class="small">이 산출물을 서빙 파이프라인(<a href="./IMPLEMENTATION_SPEC.html" style="color:var(--purple)">IMPLEMENTATION_SPEC</a> §6 <code>models/</code>)이 로드한다.</span></div>
+
+<h2 id="s9"><span class="num">9</span>학습 단계 리스크</h2>
+<table>
+  <tr><th>리스크</th><th>대응</th></tr>
+  <tr><td>합성↔실제 결함 분포 차이</td><td>다양한 합성 혼합, 실제 불량셋으로 검증·선별</td></tr>
+  <tr><td>실제 불량셋 부재</td><td>W1 즉시 착수(최우선)</td></tr>
+  <tr><td>도메인 갭(스튜디오↔휴대폰)</td><td>휴대폰 정상샘플로 PatchCore 뱅크 보강/미세보정</td></tr>
+  <tr><td>200종 분포 편중</td><td>층화 선정, 속성별 평가, 희귀 모양 일부 포함</td></tr>
+  <tr><td>4TB I/O 병목</td><td>ROI 선처리·WebDataset 패킹, 로컬 SSD 캐시</td></tr>
+</table>
+
+<footer>본 문서는 모델 학습·평가만 규정한다. 서빙은 <a href="./IMPLEMENTATION_SPEC.html" style="color:var(--purple)">IMPLEMENTATION_SPEC.html</a> 참조.</footer>
+
+</div>
+</body>
+</html>
