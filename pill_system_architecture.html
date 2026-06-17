@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>경구알약 불량 탐지 — 시스템 배포 아키텍처</title>
+<style>
+  :root{
+    --bg:#0f1419; --panel:#161b22; --panel2:#1c2330; --line:#2a3340;
+    --txt:#e6edf3; --muted:#9aa7b4; --accent:#4dabf7; --accent2:#51cf66;
+    --warn:#ffd43b; --danger:#ff6b6b; --purple:#b197fc; --orange:#ffa94d;
+    --phone:#4dabf7; --fire:#ffa94d; --server:#51cf66;
+  }
+  *{box-sizing:border-box}
+  body{margin:0; background:var(--bg); color:var(--txt);
+    font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+    line-height:1.7; font-size:15px;}
+  .wrap{max-width:1060px; margin:0 auto; padding:44px 26px 90px}
+  header.hero{background:linear-gradient(135deg,#1a2740 0%,#102030 60%,#0f1419 100%);
+    border:1px solid var(--line); border-radius:18px; padding:34px 32px; margin-bottom:30px;}
+  header.hero h1{margin:0 0 8px; font-size:26px; letter-spacing:-.5px}
+  header.hero p{margin:3px 0; color:var(--muted)}
+  h2{font-size:20px; margin:42px 0 14px; padding-bottom:9px; border-bottom:2px solid var(--line)}
+  h2 .num{color:var(--accent); margin-right:10px}
+  .muted{color:var(--muted)} .small{font-size:12.5px}
+  code{background:#222b36; padding:2px 6px; border-radius:5px; font-size:12.5px; color:#ffd9a0}
+
+  /* 3-tier columns */
+  .tiers{display:grid; grid-template-columns:1fr 1fr 1.25fr; gap:16px; align-items:start; margin:18px 0}
+  @media(max-width:840px){ .tiers{grid-template-columns:1fr} }
+  .tier{border-radius:16px; padding:18px 16px; border:1px solid var(--line); background:var(--panel)}
+  .tier h3{margin:0 0 4px; font-size:16px; display:flex; align-items:center; gap:8px}
+  .tier .role{font-size:11.5px; color:var(--muted); margin-bottom:14px; font-style:italic}
+  .tier.phone{border-top:3px solid var(--phone)}
+  .tier.fire{border-top:3px solid var(--fire)}
+  .tier.server{border-top:3px solid var(--server)}
+  .tier .ico{font-size:20px}
+
+  .box{background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:11px 13px; margin:9px 0}
+  .box .t{font-weight:700; font-size:13.5px}
+  .box .d{font-size:11.5px; color:var(--muted); margin-top:2px}
+  .box.run{border-color:#2c5a3a; background:#13251a}
+  .box.norun{border-color:#3a4660}
+  .gpu{display:inline-block; font-size:10px; font-weight:700; padding:1px 7px; border-radius:999px;
+    background:#16351f; color:var(--accent2); border:1px solid #2c5a3a; margin-left:6px}
+  .nogpu{background:#2a2230; color:var(--muted); border-color:#444}
+
+  /* docker container visual */
+  .docker{border:2px dashed #3a7bd5; border-radius:12px; padding:12px 12px 10px; margin-top:12px; background:#0e1722}
+  .docker .dlabel{font-size:11px; font-weight:800; color:#4dabf7; letter-spacing:.5px; margin-bottom:8px;
+    display:flex; align-items:center; gap:6px}
+  .stack{position:relative}
+  .stack:before,.stack:after{content:""; position:absolute; inset:0; border-radius:10px;
+    border:1px solid #2c5a3a; background:#102016; z-index:-1}
+  .stack:before{transform:translate(4px,4px)} .stack:after{transform:translate(8px,8px); opacity:.55}
+
+  /* flow steps */
+  .flow{background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:24px 22px; margin:18px 0}
+  .step{display:flex; gap:14px; align-items:flex-start; padding:10px 0; border-bottom:1px dashed #283040}
+  .step:last-child{border-bottom:0}
+  .step .n{flex:0 0 30px; height:30px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+    font-weight:800; font-size:13px; color:#0f1419}
+  .c-phone{background:var(--phone)} .c-fire{background:var(--fire)} .c-server{background:var(--server)}
+  .step .body{flex:1}
+  .step .body b{font-size:14px}
+  .step .who{font-size:10.5px; font-weight:700; padding:1px 7px; border-radius:999px; margin-left:8px}
+  .w-phone{background:#10243a;color:var(--phone);border:1px solid #27425e}
+  .w-fire{background:#33260f;color:var(--fire);border:1px solid #5a4520}
+  .w-server{background:#13251a;color:var(--server);border:1px solid #2c5a3a}
+
+  .legend{display:flex; flex-wrap:wrap; gap:16px; margin:14px 0 0}
+  .legend .it{display:flex; align-items:center; gap:7px; font-size:12.5px; color:var(--muted)}
+  .legend .sw{width:14px;height:14px;border-radius:4px}
+
+  .callout{border-left:4px solid var(--accent); background:var(--panel2); padding:14px 18px;
+    border-radius:0 12px 12px 0; margin:18px 0}
+  .callout.warn{border-left-color:var(--warn)}
+  .callout b{color:#fff}
+  table{width:100%; border-collapse:collapse; margin:14px 0; font-size:13px}
+  th,td{border:1px solid var(--line); padding:9px 11px; text-align:left}
+  th{background:#1f2937} tr:nth-child(even) td{background:#141a22}
+  footer{margin-top:50px; padding-top:18px; border-top:1px solid var(--line); color:var(--muted); font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>경구알약 불량 탐지 — 시스템 배포 아키텍처</h1>
+  <p>휴대폰(촬영) → Firebase(중계) → 서버 PC·Docker(추론) → 결과 반환</p>
+  <p class="small">서버는 NAT 뒤에 있으므로 <b>Firestore 실시간 구독(outbound)</b>으로 작업을 받아온다</p>
+</header>
+
+<!-- ===== 3계층 구조 ===== -->
+<h2><span class="num">1</span>세 계층 — 누가 무엇을 하나</h2>
+<div class="tiers">
+
+  <!-- Phone -->
+  <div class="tier phone">
+    <h3><span class="ico">📱</span> 휴대폰 앱</h3>
+    <div class="role">"찍고 보여주기만" · 모델 안 돌림</div>
+    <div class="box norun"><div class="t">카메라 촬영 <span class="gpu nogpu">GPU ✗</span></div><div class="d">촬영 가이드로 정렬·조명 유도</div></div>
+    <div class="box norun"><div class="t">이미지 업로드</div><div class="d">→ Firebase Storage</div></div>
+    <div class="box norun"><div class="t">결과 표시</div><div class="d">정상/불량 + 결함 위치 이미지</div></div>
+  </div>
+
+  <!-- Firebase -->
+  <div class="tier fire">
+    <h3><span class="ico">🔥</span> Firebase</h3>
+    <div class="role">"우체국/중계소" · 구글 클라우드 · 모델 안 돌림</div>
+    <div class="box norun"><div class="t">Storage <span class="gpu nogpu">GPU ✗</span></div><div class="d">입력·결과 이미지 창고</div></div>
+    <div class="box norun"><div class="t">Firestore</div><div class="d">요청/처리중/결과 상태 게시판</div></div>
+    <div class="box norun"><div class="t">Auth / FCM</div><div class="d">인증 · 결과 push 알림</div></div>
+  </div>
+
+  <!-- Server -->
+  <div class="tier server">
+    <h3><span class="ico">🖥️</span> 서버 PC <span class="gpu">GTX 3060</span></h3>
+    <div class="role">"진짜 일하는 컴퓨터" · 내 PC 또는 클라우드</div>
+
+    <div class="docker">
+      <div class="dlabel">🐳 DOCKER 컨테이너 — 실행환경을 담은 상자</div>
+
+      <div class="box run"><div class="t">worker (오케스트레이터)</div><div class="d">Firestore 구독 · 전처리 · 흐름 제어</div></div>
+      <div class="box run"><div class="t">① YOLO 식별기 <span class="gpu">GPU ✓</span></div><div class="d">"무슨 약?" → 약종 ID</div></div>
+      <div class="box run stack"><div class="t">② PatchCore ×200 <span class="gpu">GPU ✓</span></div><div class="d">약종별 정상 모델 (지연로딩·캐시)</div></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="legend">
+  <div class="it"><span class="sw" style="background:#13251a;border:1px solid #2c5a3a"></span>모델(GPU) 실제 실행</div>
+  <div class="it"><span class="sw" style="background:#1c2330;border:1px solid #3a4660"></span>데이터 전달만 (모델 X)</div>
+  <div class="it"><span class="sw" style="background:#0e1722;border:2px dashed #3a7bd5"></span>Docker = 실행환경 상자</div>
+</div>
+
+<!-- ===== 모델 교체 강조 ===== -->
+<div class="callout">
+  <b>🔄 "모델 교체"는 어디서? → 서버 PC 안, Docker 속 worker 코드에서</b><br>
+  <span class="small">물리적 교체가 아니라 <b>코드가 메모리에서 다른 모델을 불러오는 것</b>이다.<br>
+  <code>YOLO가 "타이레놀" 판별 → worker가 200개 중 '타이레놀 PatchCore' 로드 → 판정</code><br>
+  다음 사진이 "게보린"이면 worker가 '게보린 PatchCore'를 갈아끼운다. <b>Firebase에서는 절대 일어나지 않는다.</b></span>
+</div>
+
+<!-- ===== 데이터 흐름 ===== -->
+<h2><span class="num">2</span>데이터 흐름 (End-to-End)</h2>
+<div class="flow">
+  <div class="step"><div class="n c-phone">1</div><div class="body"><b>카메라 촬영</b><span class="who w-phone">휴대폰</span><div class="small muted">촬영 가이드로 중앙·거리·조명 표준화</div></div></div>
+  <div class="step"><div class="n c-phone">2</div><div class="body"><b>이미지 업로드 + 요청 생성</b><span class="who w-phone">휴대폰</span><div class="small muted">Storage에 사진 저장 · Firestore에 <code>status: pending</code> 문서 생성</div></div></div>
+  <div class="step"><div class="n c-server">3</div><div class="body"><b>새 요청 감지 (실시간 구독)</b><span class="who w-server">서버</span><div class="small muted">서버가 Firestore를 outbound로 리스닝 → NAT 통과 (포트개방 불필요)</div></div></div>
+  <div class="step"><div class="n c-server">4</div><div class="body"><b>이미지 다운로드 + 전처리</b><span class="who w-server">서버</span><div class="small muted">검출 → crop → 회전정렬 → 앞/뒷면</div></div></div>
+  <div class="step"><div class="n c-server">5</div><div class="body"><b>YOLO 식별 → 약종 결정</b><span class="who w-server">서버</span><div class="small muted">저신뢰면 "검토 대상" 플래그</div></div></div>
+  <div class="step"><div class="n c-server">6</div><div class="body"><b>해당 PatchCore 로드 + 불량 판정</b><span class="who w-server">서버</span><div class="small muted">🔄 모델 교체 지점 · 정상/불량 + 결함 위치(heatmap)</div></div></div>
+  <div class="step"><div class="n c-server">7</div><div class="body"><b>결과 업로드</b><span class="who w-server">서버</span><div class="small muted">결과 이미지 → Storage · Firestore 문서 <code>status: done</code> 업데이트</div></div></div>
+  <div class="step"><div class="n c-fire">8</div><div class="body"><b>결과 전달</b><span class="who w-fire">Firebase</span><div class="small muted">Firestore 변경 → 휴대폰에 실시간 전파 / FCM 알림</div></div></div>
+  <div class="step"><div class="n c-phone">9</div><div class="body"><b>결과 자동 표시</b><span class="who w-phone">휴대폰</span><div class="small muted">정상/불량 + 결함 표시 이미지</div></div></div>
+</div>
+<p class="small muted">예상 지연: 업로드~결과까지 보통 <b>2~5초</b> (처음 보는 약종은 모델 로드로 +α).</p>
+
+<!-- ===== 다른 PC 필요? ===== -->
+<h2><span class="num">3</span>"다른 PC"는 꼭 필요한가?</h2>
+<p class="small">휴대폰은 모델을 안 돌리므로, <b>모델을 돌릴 컴퓨터(=서버)는 반드시 하나 필요</b>하다. 단 그 형태는 선택이다.</p>
+<table>
+  <tr><th>선택지</th><th>서버 역할을 맡는 것</th><th>물리적 내 PC?</th></tr>
+  <tr><td><b>(A) 온프레미스</b></td><td>내 GTX 3060 PC를 켜두고 서버로 사용</td><td>필요 (그 PC)</td></tr>
+  <tr><td><b>(B) 클라우드</b></td><td>GCP GPU 인스턴스가 곧 서버</td><td>불필요 (클라우드가 대체)</td></tr>
+</table>
+<div class="callout warn">
+  <b>요약:</b> <span class="small">"물리적 다른 PC가 꼭 필요하냐"는 <b>아니오</b>(클라우드로 대체 가능). 하지만 <b>모델을 돌릴 컴퓨터 자체는 반드시 필요</b>하다. 휴대폰 + Firebase만으로는 추론이 불가능하다.</span>
+</div>
+
+<footer>
+  📱 휴대폰은 찍고 보여주기만 · 🔥 Firebase는 사진·결과를 전달하는 우체국 · 🖥️ 3060 PC(또는 클라우드)가 진짜 일하는 서버 ·
+  🐳 Docker는 그 서버 안에서 모델을 담아 돌리는 상자 · 🔄 모델 교체는 Docker 속 worker가 약종에 맞춰 수행.
+</footer>
+
+</div>
+</body>
+</html>
